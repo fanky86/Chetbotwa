@@ -4,25 +4,37 @@ const {
   DisconnectReason
 } = require('@whiskeysockets/baileys')
 const Pino = require('pino')
+const qrcode = require('qrcode-terminal')
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('./session')
 
   const sock = makeWASocket({
     logger: Pino({ level: 'silent' }),
-    auth: state,
-    printQRInTerminal: true
+    auth: state
   })
 
   sock.ev.on('creds.update', saveCreds)
 
   sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update
+    const { connection, lastDisconnect, qr } = update
+
+    // 🔥 TAMPILKAN QR
+    if (qr) {
+      console.log('📲 Scan QR ini:')
+      qrcode.generate(qr, { small: true })
+    }
+
     if (connection === 'close') {
-      if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+      const reason = lastDisconnect?.error?.output?.statusCode
+      if (reason !== DisconnectReason.loggedOut) {
         startBot()
+      } else {
+        console.log('❌ Logged out.')
       }
-    } else if (connection === 'open') {
+    }
+
+    if (connection === 'open') {
       console.log('✅ Bot Confess Online!')
     }
   })
@@ -38,17 +50,11 @@ async function startBot() {
 
     if (!text) return
 
-    /**
-     * FORMAT:
-     * confess|628xxxxxx|isi pesan
-     * confessgc|linkgrup|isi pesan
-     */
-
     if (text.startsWith('confess|')) {
       const [, number, message] = text.split('|')
       if (!number || !message) {
         return sock.sendMessage(from, {
-          text: '❌ Format salah!\nContoh:\nconfess|6281234567890|Aku suka kamu'
+          text: '❌ Format salah!\nContoh:\nconfess|628xxxxxx|isi pesan'
         })
       }
 
@@ -59,24 +65,7 @@ async function startBot() {
       })
 
       await sock.sendMessage(from, {
-        text: '✅ Confess berhasil dikirim secara anonim!'
-      })
-    }
-
-    if (text.startsWith('confessgc|')) {
-      const [, groupJid, message] = text.split('|')
-      if (!groupJid || !message) {
-        return sock.sendMessage(from, {
-          text: '❌ Format salah!\nContoh:\nconfessgc|120xxxx@g.us|Halo semua'
-        })
-      }
-
-      await sock.sendMessage(groupJid, {
-        text: `💌 *CONFESSION ANONIM*\n\n${message}\n\n_#anon_`
-      })
-
-      await sock.sendMessage(from, {
-        text: '✅ Confess ke grup berhasil!'
+        text: '✅ Confess berhasil dikirim!'
       })
     }
   })
