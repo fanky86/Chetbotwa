@@ -20,5 +20,5 @@ Bot WhatsApp untuk mengirim confession secara anonim dengan sistem moderasi admi
 
 1. Clone repository ini:
 ```bash
-git clone https://github.com/username/whatsapp-confession-bot.git
-cd whatsapp-confession-bot
+git clone https://github.com/fanky86/chetbotwa.git
+cd chetbotwa
