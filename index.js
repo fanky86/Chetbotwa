@@ -3,23 +3,24 @@ const qrcode = require('qrcode-terminal');
 const express = require('express');
 require('dotenv').config();
 
+// Inisialisasi Express untuk Vercel
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Variabel untuk menyimpan data
 let confessions = [];
 let confessionQueue = [];
 let adminList = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
 const confessionChannel = process.env.CONFESSION_CHANNEL || '';
 
-const client = new Client({
-  authStrategy: new LocalAuth({
-    clientId: "confession-bot"
-  }),
-  puppeteer: {
-    headless: true,
+// Konfigurasi Puppeteer untuk Termux dan Vercel
+const getPuppeteerConfig = () => {
+  const config = {
+    headless: 'new',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -27,18 +28,50 @@ const client = new Client({
       '--disable-accelerated-2d-canvas',
       '--no-first-run',
       '--no-zygote',
-      '--disable-gpu'
+      '--disable-gpu',
+      '--single-process',
+      '--no-zygote',
+      '--disable-features=site-per-process'
     ]
+  };
+
+  // Untuk Termux (Android), gunakan Chrome yang sudah terinstal
+  if (process.platform === 'android' || process.env.TERMUX_VERSION) {
+    config.executablePath = 'chromium';
+    console.log('🔧 Menggunakan Chromium untuk Termux');
+  }
+  
+  // Untuk Vercel, gunakan Chromium dari @sparticuz/chromium
+  if (process.env.VERCEL) {
+    console.log('🔧 Menggunakan Chromium untuk Vercel');
+    // @sparticuz/chromium akan dihandle secara otomatis
+  }
+
+  return config;
+};
+
+// Inisialisasi WhatsApp Client
+const client = new Client({
+  authStrategy: new LocalAuth({
+    clientId: "confession-bot"
+  }),
+  puppeteer: getPuppeteerConfig(),
+  webVersionCache: {
+    type: "remote",
+    remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html"
   }
 });
 
+// Event ketika QR code diperlukan
 client.on('qr', (qr) => {
   console.log('QR Code received, scan with your phone!');
   qrcode.generate(qr, { small: true });
   
+  // Tampilkan QR di console untuk Vercel
   console.log(`\n\nScan QR Code di atas untuk menghubungkan bot\n`);
 });
 
+// Event ketika client siap
 client.on('ready', () => {
   console.log('✅ Bot WhatsApp siap digunakan!');
   console.log(`🤖 Bot berjalan sebagai: ${client.info.pushname}`);
@@ -47,23 +80,32 @@ client.on('ready', () => {
   console.log(`📢 Channel confession: ${confessionChannel || 'Belum diatur'}`);
 });
 
+// Event ketika terjadi error
 client.on('auth_failure', (msg) => {
   console.error('❌ Authentication failed:', msg);
 });
 
+// Event ketika disconnected
 client.on('disconnected', (reason) => {
   console.log('⚠️ Client disconnected:', reason);
+  console.log('🔄 Mencoba menghubungkan ulang...');
+  client.initialize();
 });
 
+// Fungsi untuk mendapatkan nomor WhatsApp yang diformat
 function formatNumber(number) {
-  let cleaned = number.replace(/\D/g, '');
+  if (!number) return '';
   
+  // Hapus semua karakter non-digit
+  let cleaned = number.toString().replace(/\D/g, '');
+  
+  // Jika nomor diawali dengan 0, ganti dengan kode negara
   if (cleaned.startsWith('0')) {
     cleaned = '62' + cleaned.substring(1);
   }
   
   // Jika nomor tidak memiliki kode negara, tambahkan 62
-  if (!cleaned.startsWith('62') && !cleaned.startsWith('+')) {
+  if (!cleaned.startsWith('62')) {
     cleaned = '62' + cleaned;
   }
   
@@ -74,8 +116,10 @@ function formatNumber(number) {
 async function notifyAdmins(message) {
   for (const admin of adminList) {
     try {
-      const formattedAdmin = formatNumber(admin);
-      await client.sendMessage(formattedAdmin, message);
+      const formattedAdmin = formatNumber(admin.trim());
+      if (formattedAdmin) {
+        await client.sendMessage(formattedAdmin, message);
+      }
     } catch (error) {
       console.error(`Gagal mengirim ke admin ${admin}:`, error.message);
     }
@@ -85,11 +129,19 @@ async function notifyAdmins(message) {
 // Event ketika menerima pesan
 client.on('message', async (message) => {
   const sender = message.from;
-  const body = message.body.toLowerCase().trim();
+  const body = message.body?.toLowerCase()?.trim() || '';
   const isGroup = message.from.endsWith('@g.us');
-  const isAdmin = adminList.some(admin => sender.includes(formatNumber(admin)));
+  const isAdmin = adminList.some(admin => {
+    const formattedAdmin = formatNumber(admin.trim());
+    return formattedAdmin && sender.includes(formattedAdmin.replace('@c.us', ''));
+  });
   
-  console.log(`📩 Pesan dari: ${sender} - ${body}`);
+  console.log(`📩 Pesan dari: ${sender} - ${body.substring(0, 50)}${body.length > 50 ? '...' : ''}`);
+  
+  // Skip pesan dari broadcast atau status
+  if (message.isStatus || message.from.includes('status')) {
+    return;
+  }
   
   // Command untuk semua pengguna
   if (body === '!menu' || body === '.menu' || body === '/menu') {
@@ -140,7 +192,7 @@ client.on('message', async (message) => {
   }
   
   // Command !confess
-  if (body.startsWith('!confess') || body.startsWith('.confess')) {
+  if (body.startsWith('!confess') || body.startsWith('.confess') || body.startsWith('/confess')) {
     const confessionText = message.body.substring(message.body.indexOf(' ') + 1).trim();
     
     if (!confessionText) {
@@ -159,7 +211,7 @@ client.on('message', async (message) => {
     }
     
     // Generate ID unik
-    const confessionId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+    const confessionId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     
     // Tambah ke antrian
     confessionQueue.push({
@@ -171,10 +223,11 @@ client.on('message', async (message) => {
     });
     
     // Kirim konfirmasi ke pengirim
-    await message.reply(`✅ Confession berhasil dikirim! ID: ${confessionId}\n\nConfession kamu akan ditinjau admin.`);
+    await message.reply(`✅ Confession berhasil dikirim! ID: *${confessionId}*\n\nConfession kamu akan ditinjau admin.`);
     
     // Notifikasi ke admin
-    await notifyAdmins(`📥 *CONFESSION BARU*\nID: ${confessionId}\nPesan: ${confessionText.substring(0, 100)}${confessionText.length > 100 ? '...' : ''}\n\nBalas dengan:\n!approve ${confessionId}\natau\n!reject ${confessionId}`);
+    const shortText = confessionText.length > 100 ? confessionText.substring(0, 100) + '...' : confessionText;
+    await notifyAdmins(`📥 *CONFESSION BARU*\nID: ${confessionId}\nPesan: ${shortText}\n\nBalas dengan:\n!approve ${confessionId}\natau\n!reject ${confessionId}`);
     
     console.log(`Confession baru: ${confessionId} dari ${sender}`);
     return;
@@ -205,6 +258,11 @@ client.on('message', async (message) => {
     if (confessionChannel) {
       try {
         const formattedChannel = formatNumber(confessionChannel);
+        if (!formattedChannel) {
+          await message.reply('❌ Format channel tidak valid!');
+          return;
+        }
+        
         const confessionMessage = `💌 *CONFESSION* 💌\n\n${confession.text}\n\n_#ConfessionBot_`;
         
         await client.sendMessage(formattedChannel, confessionMessage);
@@ -216,11 +274,11 @@ client.on('message', async (message) => {
         confessions.push(confession);
         confessionQueue.splice(confessionIndex, 1);
         
-        await message.reply(`✅ Confession ${confessionId} telah disetujui dan diposting!`);
+        await message.reply(`✅ Confession *${confessionId}* telah disetujui dan diposting!`);
         
         // Beri tahu pengirim
         try {
-          await client.sendMessage(confession.sender, `🎉 Confession kamu (ID: ${confessionId}) telah disetujui dan diposting!`);
+          await client.sendMessage(confession.sender, `🎉 Confession kamu (ID: *${confessionId}*) telah disetujui dan diposting!`);
         } catch (error) {
           console.log('Tidak bisa memberi tahu pengirim:', error.message);
         }
@@ -253,11 +311,11 @@ client.on('message', async (message) => {
     const confession = confessionQueue[confessionIndex];
     confessionQueue.splice(confessionIndex, 1);
     
-    await message.reply(`❌ Confession ${confessionId} telah ditolak.`);
+    await message.reply(`❌ Confession *${confessionId}* telah ditolak.`);
     
     // Beri tahu pengirim
     try {
-      await client.sendMessage(confession.sender, `😔 Maaf, confession kamu (ID: ${confessionId}) tidak disetujui.`);
+      await client.sendMessage(confession.sender, `😔 Maaf, confession kamu (ID: *${confessionId}*) tidak disetujui.`);
     } catch (error) {
       console.log('Tidak bisa memberi tahu pengirim:', error.message);
     }
@@ -275,7 +333,7 @@ client.on('message', async (message) => {
     let listMessage = `📋 *DAFTAR CONFESSION* (${confessionQueue.length})\n\n`;
     
     confessionQueue.forEach((confession, index) => {
-      listMessage += `${index + 1}. ID: ${confession.id}\n`;
+      listMessage += `*${index + 1}. ID:* ${confession.id}\n`;
       listMessage += `   Pesan: ${confession.text.substring(0, 50)}${confession.text.length > 50 ? '...' : ''}\n`;
       listMessage += `   Waktu: ${confession.timestamp.toLocaleTimeString('id-ID')}\n\n`;
     });
@@ -302,6 +360,11 @@ client.on('message', async (message) => {
     
     try {
       const formattedChannel = formatNumber(confessionChannel);
+      if (!formattedChannel) {
+        await message.reply('❌ Format channel tidak valid!');
+        return;
+      }
+      
       await client.sendMessage(formattedChannel, `📢 *PENGUMUMAN*\n\n${broadcastMessage}\n\n_Admin Confession_`);
       await message.reply('✅ Broadcast berhasil dikirim!');
     } catch (error) {
@@ -319,20 +382,10 @@ client.on('message', async (message) => {
       return;
     }
     
-    const formattedChannel = formatNumber(channelNumber);
+    // Update channel di environment variable
+    process.env.CONFESSION_CHANNEL = channelNumber;
     
-    try {
-      // Coba kirim pesan test ke channel
-      await client.sendMessage(formattedChannel, '🔔 *Channel Confession Aktif*\n\nChannel ini sekarang digunakan untuk confession bot.\n\n_Bot initialized_');
-      
-      // Update channel di environment variable
-      process.env.CONFESSION_CHANNEL = channelNumber;
-      confessionChannel = channelNumber;
-      
-      await message.reply(`✅ Channel confession berhasil diatur ke: ${channelNumber}`);
-    } catch (error) {
-      await message.reply(`❌ Gagal mengatur channel: ${error.message}\nPastikan nomor benar dan bot sudah ditambahkan ke grup/channel.`);
-    }
+    await message.reply(`✅ Channel confession berhasil diatur ke: ${channelNumber}\n\nPastikan bot sudah ditambahkan ke grup/nomor tersebut.`);
     return;
   }
   
@@ -378,7 +431,7 @@ client.on('message', async (message) => {
   }
 });
 
-// Rute untuk health check (diperlukan Vercel)
+// Rute untuk health check
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
@@ -388,11 +441,13 @@ app.get('/', (req, res) => {
     totalConfessions: confessions.length,
     adminCount: adminList.length,
     botReady: client.info ? true : false,
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    platform: process.platform,
+    termux: !!process.env.TERMUX_VERSION
   });
 });
 
-// Rute untuk melihat antrian confession (API)
+// Rute untuk melihat antrian confession
 app.get('/queue', (req, res) => {
   res.json({
     queue: confessionQueue,
@@ -403,7 +458,7 @@ app.get('/queue', (req, res) => {
 // Rute untuk melihat confession yang sudah diposting
 app.get('/confessions', (req, res) => {
   res.json({
-    confessions: confessions,
+    confessions: confessions.slice(-20), // 20 terakhir
     count: confessions.length
   });
 });
@@ -411,29 +466,46 @@ app.get('/confessions', (req, res) => {
 // Rute untuk mendapatkan status bot
 app.get('/status', (req, res) => {
   res.json({
-    botInfo: client.info,
-    isReady: !!client.info,
+    botReady: !!client.info,
     user: client.info ? client.info.pushname : null,
     phone: client.info ? client.info.wid.user : null,
-    platform: client.info ? client.info.platform : null
+    platform: process.platform
   });
 });
 
 // Inisialisasi client WhatsApp
-client.initialize();
+client.initialize().catch(err => {
+  console.error('❌ Gagal menginisialisasi client:', err);
+});
 
 // Jalankan server Express
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`🚀 Server berjalan di port ${port}`);
   console.log(`🌐 Health check: http://localhost:${port}`);
+  console.log(`📱 Platform: ${process.platform}`);
+  console.log(`🔧 Termux: ${process.env.TERMUX_VERSION ? 'Yes' : 'No'}`);
 });
 
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n\n⏳ Menutup bot...');
-  await client.destroy();
-  console.log('✅ Bot berhasil dimatikan.');
+  try {
+    await client.destroy();
+    server.close();
+    console.log('✅ Bot berhasil dimatikan.');
+  } catch (error) {
+    console.error('Error saat menutup:', error);
+  }
   process.exit(0);
+});
+
+// Handle uncaught errors
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 // Export app untuk Vercel
