@@ -9,7 +9,7 @@ const fs = require('fs')
 
 // ================= CONFIG =================
 const ADMIN = '6289523220911@s.whatsapp.net' // GANTI NOMOR KAMU
-const COOLDOWN = 60 * 1000 // 1 menit
+const COOLDOWN = 10 * 1000 // 1 menit
 const EXPIRE = 24 * 60 * 60 * 1000 // 24 jam
 const DB_FILE = './confess.json'
 
