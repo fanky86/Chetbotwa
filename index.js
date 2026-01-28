@@ -3,21 +3,17 @@ const qrcode = require('qrcode-terminal');
 const express = require('express');
 require('dotenv').config();
 
-// Inisialisasi Express untuk Vercel
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Variabel untuk menyimpan data (gunakan database di production)
 let confessions = [];
 let confessionQueue = [];
 let adminList = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
 const confessionChannel = process.env.CONFESSION_CHANNEL || '';
 
-// Inisialisasi WhatsApp Client
 const client = new Client({
   authStrategy: new LocalAuth({
     clientId: "confession-bot"
@@ -36,16 +32,13 @@ const client = new Client({
   }
 });
 
-// Event ketika QR code diperlukan
 client.on('qr', (qr) => {
   console.log('QR Code received, scan with your phone!');
   qrcode.generate(qr, { small: true });
   
-  // Tampilkan QR di console untuk Vercel
   console.log(`\n\nScan QR Code di atas untuk menghubungkan bot\n`);
 });
 
-// Event ketika client siap
 client.on('ready', () => {
   console.log('✅ Bot WhatsApp siap digunakan!');
   console.log(`🤖 Bot berjalan sebagai: ${client.info.pushname}`);
@@ -54,22 +47,17 @@ client.on('ready', () => {
   console.log(`📢 Channel confession: ${confessionChannel || 'Belum diatur'}`);
 });
 
-// Event ketika terjadi error
 client.on('auth_failure', (msg) => {
   console.error('❌ Authentication failed:', msg);
 });
 
-// Event ketika disconnected
 client.on('disconnected', (reason) => {
   console.log('⚠️ Client disconnected:', reason);
 });
 
-// Fungsi untuk mendapatkan nomor WhatsApp yang diformat
 function formatNumber(number) {
-  // Hapus semua karakter non-digit
   let cleaned = number.replace(/\D/g, '');
   
-  // Jika nomor diawali dengan 0, ganti dengan kode negara
   if (cleaned.startsWith('0')) {
     cleaned = '62' + cleaned.substring(1);
   }
